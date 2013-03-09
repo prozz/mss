@@ -1,42 +1,55 @@
 (ns mss.core
+  (:use
+    [clojure.string :only (join)]
+    [clojure.tools.logging :only (info)])
   (:import
-    [java.net InetSocketAddress]
-    [java.nio.channels ServerSocketChannel Selector SelectionKey]
+    [java.net InetSocketAddress ServerSocket Socket]
+    [java.nio.channels SocketChannel ServerSocketChannel Selector SelectionKey]
     [java.nio ByteBuffer]
     [java.nio.charset Charset])
   (:gen-class))
 
-(def buf (ByteBuffer/allocate 16384))
-(def charset (Charset/forName "UTF-8"))
+(def ^ByteBuffer buf (ByteBuffer/allocate 16384))
+(def ^Charset charset (Charset/forName "UTF-8"))
 
 (defn buf->str [byte-buffer] (.toString (.decode charset byte-buffer)))
 
-(defn accept-connection [server-socket selector]
-  (let [channel (-> server-socket (.accept) (.getChannel))]
-    (println "connection accepted from " channel)
+(defn audit [action ^SocketChannel channel & args]
+  (let [^Socket socket (.socket channel)
+        ip (-> socket (.getInetAddress) (.getHostAddress))
+        port (.getPort socket)]
+    (info (str ip ":" port) action (join " " args))))
+
+(defn accept-connection [^ServerSocket server-socket selector]
+  (let [^ServerSocketChannel channel (-> server-socket (.accept) (.getChannel))]
+    (audit :accepted channel)
     (doto channel
       (.configureBlocking false)
       (.register selector SelectionKey/OP_READ))))
 
-(defn read-socket [key]
-  (let [socket-channel (.channel key)]
+(defn disconnect [^SelectionKey key]
+  (do
+    (.cancel key)
+    (-> ^ServerSocketChannel (.channel key)
+      (.socket)
+      (.close))))
+
+(defn handle-msg [str]
+  (println "received: " str))
+
+(defn read-socket [^SelectionKey key]
+  (let [^SocketChannel socket-channel (.channel key)]
     (.clear buf)
-    (.read (.channel key) buf)
+    (.read socket-channel buf)
     (.flip buf)
     (if (zero? (.limit buf))
       (do
-        (println "Lost connection from" socket-channel)
-        (.cancel key)
-        (.close (.socket socket-channel)))
-      (println "read: " (buf->str buf)))))
-
-(defn disconnect [key]
-  (do
-    (.cancel key)
-    (-> key
-      (.channel)
-      (.socket)
-      (.close))))
+        (audit :lost socket-channel)
+        (disconnect key))
+      (do
+        (let [msg (buf->str buf)]
+          (audit :recv socket-channel msg)
+          (handle-msg msg))))))
 
 (defn selector [] (Selector/open))
 
@@ -46,22 +59,23 @@
       (.configureBlocking false)
       (.register selector SelectionKey/OP_ACCEPT))))
 
-(defn server-socket [server-channel port]
-  (let [server-socket (.socket server-channel)]
+(defn server-socket [^ServerSocketChannel server-channel port]
+  (let [^ServerSocket server-socket (.socket server-channel)]
     (doto server-socket
       (.bind (InetSocketAddress. port)))))
 
 (defn bootstrap-server [port]
   (let [selector (selector)
         channel (server-channel selector)
-        server-socket (server-socket channel port)]
+         server-socket (server-socket channel port)]
+    (info "server is up and running on port" port)
     [selector server-socket]))
 
-(defn server-loop [selector server-socket]
+(defn server-loop [^Selector selector ^ServerSocketChannel server-socket]
   (while true
     (when (> (.select selector) 0)
       (let [selected-keys (.selectedKeys selector)]
-        (doseq [k selected-keys]
+        (doseq [^SelectionKey k selected-keys]
           (cond
             (.isAcceptable k) (accept-connection server-socket selector)
             (.isReadable k) (read-socket k))
