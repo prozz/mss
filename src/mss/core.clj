@@ -1,7 +1,7 @@
 (ns mss.core
   (:use
     [clojure.string :only (join)]
-    [clojure.tools.logging :only (info)])
+    [taoensso.timbre :as log :only (info)])
   (:import
     [java.net InetSocketAddress ServerSocket Socket]
     [java.nio.channels SocketChannel ServerSocketChannel Selector SelectionKey]
@@ -9,8 +9,8 @@
     [java.nio.charset Charset])
   (:gen-class))
 
-(def ^ByteBuffer buf (ByteBuffer/allocate 16384))
-(def ^Charset charset (Charset/forName "UTF-8"))
+(def ^:private ^ByteBuffer buf (ByteBuffer/allocate 16384))
+(def ^:private ^Charset charset (Charset/forName "UTF-8"))
 
 (defn buf->str [byte-buffer] (.toString (.decode charset byte-buffer)))
 
@@ -18,7 +18,7 @@
   (let [^Socket socket (.socket channel)
         ip (-> socket (.getInetAddress) (.getHostAddress))
         port (.getPort socket)]
-    (info (str ip ":" port) action (join " " args))))
+    (log/info (str ip ":" port) action (join " " args))))
 
 (defn accept-connection [^ServerSocket server-socket selector]
   (let [^ServerSocketChannel channel (-> server-socket (.accept) (.getChannel))]
@@ -68,7 +68,7 @@
   (let [selector (selector)
         channel (server-channel selector)
          server-socket (server-socket channel port)]
-    (info "server is up and running on port" port)
+    (log/info "server is up and running on port" port)
     [selector server-socket]))
 
 (defn server-loop [^Selector selector ^ServerSocketChannel server-socket]
